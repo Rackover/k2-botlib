@@ -87,7 +87,7 @@
 
         private readonly string[] obligatoryFunctions = new[]
         {
-            TAKE_ACTIONS_FUNC, 
+            TAKE_ACTIONS_FUNC,
             GET_PERSONAS_FUNC
         };
 
@@ -99,8 +99,8 @@
         {
             name = Path.GetFileNameWithoutExtension(allFiles[fileIndex].name);
             script = new MoonSharp.Interpreter.Script(
-                CoreModules.Preset_HardSandbox 
-                | CoreModules.LoadMethods    
+                CoreModules.Preset_HardSandbox
+                | CoreModules.LoadMethods
                 | CoreModules.Coroutine
                 | CoreModules.Metatables
             );
@@ -190,7 +190,7 @@
                     try {
                         routine.Resume();
                     }
-                    catch(InterpreterException iE) {
+                    catch (InterpreterException iE) {
                         Err(iE.DecoratedMessage);
                         Err(iE.ToString());
                         break;
@@ -273,7 +273,7 @@
                     builder.Append("void ()");
                 }
                 else if (value.Type == DataType.ClrFunction) {
-                    
+
                     builder.Append(value.Callback.Name + " ()");
                 }
                 else {
@@ -443,12 +443,25 @@
                 return DynValue.NewTable(table);
             }
 
+            DynValue isReinforcedAgainstAttacks(DynValue region)
+            {
+                int regionIndex = (int)region.Number;
+                List<int> regions = new List<int>();
+
+                if (world.Regions[regionIndex].IsReinforcedAgainstAttack(rules, world.GetRealmFaction(forRealmIndex))) {
+                    return DynValue.False;
+                }
+                else {
+                    return DynValue.True;
+                }
+            }
+
             DynValue canRegionBeTaken(DynValue region)
             {
                 int regionIndex = (int)region.Number;
                 List<int> regions = new List<int>();
 
-                if (world.Regions[regionIndex].CannotBeTaken(rules)) {
+                if (world.Regions[regionIndex].CannotBeTaken(rules, world.GetRealmFaction(forRealmIndex))) {
                     return DynValue.False;
                 }
                 else {
@@ -482,6 +495,45 @@
                 }
             }
 
+            DynValue realmHasFaction(DynValue realm, DynValue faction)
+            {
+                int realmIndex = (int)realm.Number;
+                EFactionFlag factionFlags = (EFactionFlag)(int)faction.Number;
+
+                try {
+                    if (world.GetRealmFaction(realmIndex).HasFlagSafe(factionFlags)) {
+                        return DynValue.True;
+                    }
+                    else {
+                        return DynValue.False;
+                    }
+                }
+                catch (Exception e) {
+                    Err($"Parameter error (realm {realmIndex} / faction flags {factionFlags}): {e.Message}");
+                    return DynValue.False;
+                }
+            }
+
+            DynValue regionHasFaction(DynValue region, DynValue faction)
+            {
+                int regionIndex = (int)region.Number;
+                EFactionFlag factionFlags = (EFactionFlag)(int)faction.Number;
+
+                try {
+
+                    if (world.GetRegionFaction(regionIndex).HasFlagSafe(factionFlags)) {
+                        return DynValue.True;
+                    }
+                    else {
+                        return DynValue.False;
+                    }
+                }
+                catch (Exception e) {
+                    Err($"Parameter error (realm {regionIndex} / faction flags {factionFlags}): {e.Message}");
+                    return DynValue.False;
+                }
+            }
+
             result[PascalToSnake(nameof(world.Position))] = (OneParamMultiGetterDelegate)toPosition;
             result[PascalToSnake(nameof(world.CanRealmAttackRegion))] = ToLuaFunction<byte, int, bool>(world.CanRealmAttackRegion);
             result[PascalToSnake(nameof(world.GetRealmFaction))] = ToLuaFunction<int, EFactionFlag>(world.GetRealmFaction);
@@ -497,11 +549,15 @@
 
             result[PascalToSnake(nameof(world.GetCapitalOfRealm))] = (OneParamGetterDelegate)getCapitalOfRealm;
             result["get_region_owner"] = (OneParamGetterDelegate)getOwnerOfRegion;
-            result["get_region_building"] = (OneParamGetterDelegate)getRegionBuilding;
-            result["can_region_be_taken"] = (OneParamGetterDelegate)canRegionBeTaken;
+            result[PascalToSnake(nameof(getRegionBuilding))] = (OneParamGetterDelegate)getRegionBuilding;
+            result[PascalToSnake(nameof(canRegionBeTaken))] = (OneParamGetterDelegate)canRegionBeTaken;
+            result["is_region_reinforced"] = (OneParamGetterDelegate)isReinforcedAgainstAttacks;
 
             result["get_regions"] = (GetterDelegate)getRegionList;
             result["get_realms"] = (GetterDelegate)getRealmsList;
+
+            result[PascalToSnake(nameof(realmHasFaction))] = (TwoParamGetterDelegate)realmHasFaction;
+            result[PascalToSnake(nameof(regionHasFaction))] = (TwoParamGetterDelegate)regionHasFaction;
 
             return DynValue.NewTable(result);
         }
@@ -710,29 +766,41 @@
 
         private void InjectEnum<T>() where T : struct, Enum
         {
+            bool isString = !typeof(T).GetCustomAttributes(typeof(FlagsAttribute), true).Any();
+
             Script.GlobalOptions.CustomConverters.SetClrToScriptCustomConversion<T>(
                 (script, v) => DynValue.NewString(v.ToString())
             );
 
             Script.GlobalOptions.CustomConverters.SetScriptToClrCustomConversion(
-                DataType.String,
+                isString ? DataType.String : DataType.Number,
                 typeof(T),
                 (dynVal) =>
                 {
-                    bool findEnum(string str, out T parsed)
-                    {
-                        if (Enum.TryParse<T>(str, out parsed)) {
-                            return true;
+                    if (isString) {
+                        bool findEnum(string str, out T parsed)
+                        {
+                            if (Enum.TryParse<T>(str, out parsed)) {
+                                return true;
+                            }
+
+                            Err($"Unknown {typeof(T)} name {str}. Valid {typeof(T)} values are: {string.Join(", ", Enum.GetNames(typeof(T)))}");
+
+                            return false;
                         }
 
-                        Err($"Unknown {typeof(T)} name {str}. Valid {typeof(T)} values are: {string.Join(", ", Enum.GetNames(typeof(T)))}");
 
-                        return false;
+                        if (findEnum(dynVal.String, out T castValue)) {
+                            return castValue;
+                        }
                     }
-
-
-                    if (findEnum(dynVal.String, out T castValue)) {
-                        return castValue;
+                    else {
+                        if (Enum.IsDefined(typeof(T), (int)dynVal.Number)) {
+                            return Enum.ToObject(typeof(T), (int)dynVal.Number);
+                        }
+                        else {
+                            Err($"Unknown {typeof(T)} flag-set {(int)dynVal.Number}. Valid {typeof(T)} flags are: {string.Join(", ", Enum.GetValues(typeof(T)))}");
+                        }
                     }
 
                     return default;
@@ -745,7 +813,10 @@
             for (int i = 0; i < values.Length; i++) {
                 T val = (T)values.GetValue(i);
                 string str = val.ToString();
-                table.Set(PascalToSnake(str).ToUpper(), DynValue.NewString(str));
+                table.Set(
+                    PascalToSnake(str).ToUpper(),
+                    isString ? DynValue.NewString(str) : DynValue.NewNumber((int)values.GetValue(i))
+                );
             }
 
             script.Globals[typeof(T).Name.ToUpper()] = DynValue.NewTable(table);
