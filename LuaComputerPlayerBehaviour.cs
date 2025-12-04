@@ -114,6 +114,13 @@
             }
             catch (MoonSharp.Interpreter.InterpreterException e) {
 
+                Err($"While loading script named {allFiles[fileIndex].name}");
+                Err($"While loading script content\n{allFiles[fileIndex].getText()}");
+                Err($"All files: {string.Join(" ", allFiles.Select(o => o.name))}");
+                Err($"All texts: {string.Join(" ", allFiles.Select(o => o.getText()))}");
+
+                Err(e.DecoratedMessage);
+
                 throw e;
             }
 
