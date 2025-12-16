@@ -14,6 +14,9 @@
 
     public class LuaComputerPlayerBehaviour : ComputerPlayerBehaviour
     {
+        public const byte NO_AUTO_YIELD = 0;
+        public const byte AUTO_YIELD_EVERY_X_INSTRUCTION = 60;
+
         private struct LuaScriptLoader : IScriptLoader
         {
             private readonly IReadOnlyList<LuaFile> files;
@@ -173,9 +176,13 @@
             DynValue api = MakeAPI(forPlayerIndex, session);
             api.Table.Set(PascalToSnake("localPlayerIndex"), DynValue.NewNumber(forPlayerIndex));
 
+            int maxTicks = AUTO_YIELD_EVERY_X_INSTRUCTION == NO_AUTO_YIELD ?
+                MAX_TICKS_ACTIONS :
+                int.MaxValue;
+
             try {
                 Execute(forPlayerIndex, TAKE_ACTIONS_FUNC, api);
-                return PlayRoutinesToEnd(forPlayerIndex, MAX_TICKS_ACTIONS);
+                return PlayRoutinesToEnd(forPlayerIndex, maxTicks);
             }
             catch (InterpreterException iE) {
                 Err(iE.DecoratedMessage);
@@ -240,6 +247,7 @@
         {
             if (!script.Globals.Get(functionName).IsNilOrNan()) {
                 var routine = script.CreateCoroutine(script.Globals[functionName]).Coroutine;
+                routine.AutoYieldCounter = AUTO_YIELD_EVERY_X_INSTRUCTION;
 
                 try {
                     routine.Resume(args);
