@@ -117,12 +117,16 @@
             }
             catch (MoonSharp.Interpreter.InterpreterException e) {
 
-                Err($"While loading script named {allFiles[fileIndex].name}");
-                Err($"While loading script content\n{allFiles[fileIndex].getText()}");
-                Err($"All files: {string.Join(" ", allFiles.Select(o => o.name))}");
-                Err($"All texts: {string.Join(" ", allFiles.Select(o => o.getText()))}");
+                StringBuilder sb = new StringBuilder();
 
-                Err(e.DecoratedMessage);
+                sb.AppendLine(e.DecoratedMessage);
+
+                sb.AppendLine($"While loading script named {(allFiles.Count > fileIndex ? allFiles[fileIndex].name : "<OOR>")}");
+                sb.AppendLine($"While loading script content {(allFiles.Count > fileIndex ? allFiles[fileIndex].getText() : "<OOR>")}");
+                sb.AppendLine($"All files: {string.Join(" ", allFiles.Select(o => o.name))}");
+                sb.AppendLine($"All texts: {string.Join(" ", allFiles.Select(o => o.getText()))}");
+
+                Err(sb.ToString());
 
                 throw e;
             }
