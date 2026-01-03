@@ -76,6 +76,11 @@
             {
                 this.MissingFunctions = missingFunctions;
             }
+
+            public override string ToString()
+            {
+                return $"{nameof(MissingCriticalFunction)} => {string.Join(" ", MissingFunctions)}";
+            }
         }
 
         private const string TAKE_ACTIONS_FUNC = "PLAY_TURN";
@@ -309,6 +314,7 @@
             // This is repeated at each decision time
             Table table = new Table(script);
 
+
             table["rules"] = MakeAPI(session.Rules);
             table["random"] = MakeAPI(session.ComputersRandom);
             table["player"] = MakeAPI(session.SessionPlayers[forPlayerIndex]);
@@ -322,6 +328,23 @@
 
             return DynValue.NewTable(table);
         }
+
+        //private DynValue MakeAPI(int forRegionIndex, World world, List<SessionPlayer> alliance, GameSession session)
+        //{
+        //    Table table = new Table(script);
+
+        //    List<int> neighbors = new List<int>(8);
+        //    world.GetNeighboringRegions(forRegionIndex, neighbors);
+
+        //    table["neighbor_indices"] = new Table(script, neighbors.Select(o => DynValue.NewNumber(o)).ToArray());
+        //    table["building"] = world.Regions[forRegionIndex].buildings;
+
+            
+        //    table["planned_construction"] = world.Regions[]
+
+        //    return DynValue.NewTable(table);
+        //}
+
 
         private DynValue MakeAPI(Voting voting)
         {
@@ -516,7 +539,7 @@
 
             DynValue realmHasFaction(DynValue realm, DynValue faction)
             {
-                int realmIndex = (int)realm.Number;
+                byte realmIndex = (byte)realm.Number;
                 EFactionFlag factionFlags = (EFactionFlag)(int)faction.Number;
 
                 try {
@@ -555,7 +578,7 @@
 
             result[PascalToSnake(nameof(world.Position))] = (OneParamMultiGetterDelegate)toPosition;
             result[PascalToSnake(nameof(world.CanRealmAttackRegion))] = ToLuaFunction<byte, int, bool>(world.CanRealmAttackRegion);
-            result[PascalToSnake(nameof(world.GetRealmFaction))] = ToLuaFunction<int, EFactionFlag>(world.GetRealmFaction);
+            result[PascalToSnake(nameof(world.GetRealmFaction))] = ToLuaFunction<byte, EFactionFlag>(world.GetRealmFaction);
             result[PascalToSnake(nameof(world.GetRegionFaction))] = ToLuaFunction<int, EFactionFlag>(world.GetRegionFaction);
             result[PascalToSnake(nameof(world.GetRegionLootableSilverWorth))] = (OneParamGetterDelegate)getRegionLootableSilverWorth;
             result[PascalToSnake(nameof(world.GetRegionSilverWorth))] = ToLuaFunction<int, int>(world.GetRegionSilverWorth);
