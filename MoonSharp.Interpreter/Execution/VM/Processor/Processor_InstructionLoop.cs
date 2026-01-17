@@ -1261,7 +1261,7 @@ namespace MoonSharp.Interpreter.Execution.VM
 					h = GetMetamethodRaw(obj, "__newindex");
 
 					if (h == null || h.IsNil())
-						throw ScriptRuntimeException.IndexType(obj);
+						throw ScriptRuntimeException.IndexType(obj, originalIdx.ToString());
 				}
 
 				if (h.Type == DataType.Function || h.Type == DataType.ClrFunction)
@@ -1346,7 +1346,7 @@ namespace MoonSharp.Interpreter.Execution.VM
 					h = GetMetamethodRaw(obj, "__index");
 
 					if (h == null || h.IsNil())
-						throw ScriptRuntimeException.IndexType(obj);
+						throw ScriptRuntimeException.IndexType(obj, originalIdx.ToString());
 				}
 
 				if (h.Type == DataType.Function || h.Type == DataType.ClrFunction)

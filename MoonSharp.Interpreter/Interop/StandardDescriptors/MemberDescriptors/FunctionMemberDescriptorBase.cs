@@ -135,7 +135,8 @@ namespace MoonSharp.Interpreter.Interop
 
 			object[] pars = new object[parameters.Length];
 
-			int j = args.IsMethodCall ? 1 : 0;
+            //int j = args.IsMethodCall ? 1 : 0;
+            int j = 0; // Louve: Why is there a +1 for thiscalls() ? this breaks self methods :thinking:
 
 			outParams = null;
 

@@ -262,9 +262,9 @@ namespace MoonSharp.Interpreter
 		/// <returns>
 		/// The exception to be raised.
 		/// </returns>
-		public static ScriptRuntimeException IndexType(DynValue obj)
+		public static ScriptRuntimeException IndexType(DynValue obj, string name)
 		{
-			return new ScriptRuntimeException("attempt to index a {0} value", obj.Type.ToLuaTypeString());
+			return new ScriptRuntimeException("attempt to index a {0} (\"<nil>[{1}]\")", obj.Type.ToLuaTypeString(), name);
 		}
 
 		/// <summary>

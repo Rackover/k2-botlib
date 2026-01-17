@@ -7,10 +7,12 @@
     using MoonSharp.Interpreter.Serialization.Json;
     using System;
     using System.Collections.Generic;
+    using System.Diagnostics;
     using System.IO;
     using System.Linq;
     using System.Numerics;
     using System.Text;
+    using UnityEngine.Assertions;
 
     public class LuaComputerPlayerBehaviour : ComputerPlayerBehaviour
     {
@@ -143,37 +145,29 @@
 
         public override IEnumerator<bool> TakeActionsLate(byte forPlayerIndex, GameSession session)
         {
-            if (script.Globals.Get(TAKE_ACTIONS_LATE_FUNC).IsNilOrNan()) {
-                if (routines.ContainsKey(forPlayerIndex)) {
-                    routines[forPlayerIndex].Clear();
-                }
-                else {
-                    routines.Add(forPlayerIndex, new List<Coroutine>());
-                }
-
-                DynValue api = MakeGameObject(forPlayerIndex, session);
-                api.Table.Set(PascalToSnake("localPlayerIndex"), DynValue.NewNumber(forPlayerIndex));
-
-                try {
-                    Execute(forPlayerIndex, TAKE_ACTIONS_LATE_FUNC, api);
-                }
-                catch (Exception e) {
-                    Err(e.ToString());
-                    throw e;
-                }
-
-                var it = PlayRoutinesToEnd(forPlayerIndex, MAX_TICKS_LATE_ACTIONS);
-                bool shouldEnd = it.Current;
-                while (it.MoveNext() && !shouldEnd) {
-                    shouldEnd = it.Current;
-                    yield return false;
-                }
-            }
-
-            yield return true;
+            return TakeActions(
+                forPlayerIndex,
+                session,
+                TAKE_ACTIONS_LATE_FUNC,
+                AUTO_YIELD_EVERY_X_INSTRUCTION == NO_AUTO_YIELD ?
+                    MAX_TICKS_LATE_ACTIONS :
+                    int.MaxValue
+            );
         }
 
         public override IEnumerator<bool> TakeActions(byte forPlayerIndex, GameSession session)
+        {
+            return TakeActions(
+                forPlayerIndex,
+                session,
+                TAKE_ACTIONS_FUNC,
+                AUTO_YIELD_EVERY_X_INSTRUCTION == NO_AUTO_YIELD ?
+                    MAX_TICKS_ACTIONS :
+                    int.MaxValue
+            );
+        }
+
+        private IEnumerator<bool> TakeActions(byte forPlayerIndex, GameSession session, string funcName, int maxTicks)
         {
             if (routines.ContainsKey(forPlayerIndex)) {
                 routines[forPlayerIndex].Clear();
@@ -183,14 +177,17 @@
             }
 
             DynValue api = MakeGameObject(forPlayerIndex, session);
-            api.Table.Set(PascalToSnake("localPlayerIndex"), DynValue.NewNumber(forPlayerIndex));
 
-            int maxTicks = AUTO_YIELD_EVERY_X_INSTRUCTION == NO_AUTO_YIELD ?
-                MAX_TICKS_ACTIONS :
-                int.MaxValue;
+#if UNITY_EDITOR
+            {
+                StringBuilder builder = new StringBuilder();
+                PrintTableRecursively(api, builder);
+                Log($"Lua API dump: {builder.ToString()}");
+            }
+#endif
 
             try {
-                Execute(forPlayerIndex, TAKE_ACTIONS_FUNC, api);
+                Execute(forPlayerIndex, funcName, api);
                 return PlayRoutinesToEnd(forPlayerIndex, maxTicks);
             }
             catch (InterpreterException iE) {
@@ -214,8 +211,7 @@
                         routine.Resume();
                     }
                     catch (InterpreterException iE) {
-                        Err(iE.DecoratedMessage);
-                        Err(iE.ToString());
+                        Err($"{iE.DecoratedMessage}\n{string.Join("\n", iE.CallStack)}\n{iE}");
                         break;
                     }
                     catch (Exception e) {
@@ -262,7 +258,7 @@
                     routine.Resume(args);
                 }
                 catch (InterpreterException e) {
-                    Err(e.DecoratedMessage);
+                    Err($"{e.DecoratedMessage}\n{string.Join("\n", e.CallStack)}");
                 }
 
                 if (routine.State != CoroutineState.Dead) {
@@ -324,47 +320,47 @@
             table["rules"] = MakeRulesObject(session.Rules);
             table["random"] = MakeAPI(session.ComputersRandom);
             table["player"] = MakeAPI(session.SessionPlayers[forPlayerIndex]);
-            table["world"] = MakeWorldObject(session.CurrentGameState.world, session.Rules, session.SessionPlayers[forPlayerIndex].RealmIndex);
+            table["world"] = MakeWorldObject(session.SessionPlayers[forPlayerIndex], session.CurrentGameState.world, session);
             table["voting"] = MakeVotingObject(session.CurrentGameState.voting);
             table["days_passed"] = session.CurrentGameState.daysPassed;
             table["days_before_next_council"] = session.CurrentGameState.daysRemainingBeforeNextCouncil;
             table["councils_passed"] = session.CurrentGameState.councilsPassed;
             table["buildings"] = MakeBuildingsObject(session.SessionPlayers[forPlayerIndex], session.CurrentGameState.world, session);
 
-            table["refresh"] = (OneParamNoReturnDelegate)(DynValue self) => {
+            table["refresh"] = (OneParamNoReturnDelegate)((DynValue self) =>
+            {
                 WriteGameObjectInto(forPlayerIndex, session, self.Table);
-            };
+            });
 
         }
 
         private void WriteRealmObjectInto(SessionPlayer player, byte forRealmIndex, World world, GameSession session, Table table)
         {
-            
-            table["capital"] = 
-                world.GetCapitalOfRealm(forRealmIndex, out int regionIndex) 
-                ? Dyn(regionIndex) 
+
+            table["capital"] =
+                world.GetCapitalOfRealm(forRealmIndex, out int regionIndex)
+                ? IndexToLuaIndex(regionIndex)
                 : DynValue.Nil;
-            
+
             {
-                List<DynValue> regionsIndices = new ();
+                List<DynValue> regionsIndices = new();
 
                 List<int> regions = new List<int>();
 
                 world.GetTerritoryOfRealm(forRealmIndex, regions);
 
                 for (int i = 0; i < regions.Count; i++) {
-                    regionsIndices.Add(Dyn(regions[i]));
+                    regionsIndices.Add(IndexToLuaIndex(regions[i]));
                 }
-                
-                table["owned_regions"] = new Table(script, regionsIndices);
+
+                table["owned_regions"] = new Table(script, regionsIndices.ToArray());
             }
 
             table["is_council"] = world.IsCouncilRealm(forRealmIndex);
 
             table["faction"] = world.GetRealmFaction(forRealmIndex);
 
-            if (world.IsRealmAlliedWith(player.RealmIndex, forRealmIndex) && session.GetOwnerOfRealm(forRealmIndex, out byte playerId))
-            {
+            if (world.IsRealmAlliedWith(player.RealmIndex, forRealmIndex) && session.GetOwnerOfRealm(forRealmIndex, out byte playerId)) {
                 SessionPlayer forPlayer = session.SessionPlayers[playerId];
                 table["administration_upgrade_is_planned"] = forPlayer.AdminUpgradeIsPlanned();
                 table["any_decisions_remaining"] = forPlayer.AnyDecisionsRemaining();
@@ -377,9 +373,8 @@
                 table["is_favoured"] = forPlayer.IsFavoured();
             }
 
-            if (world.CanSeePlannedAttacksOf(player.RealmIndex, forRealmIndex))
-            {
-                
+            if (world.CanSeePlannedAttacksOf(player.RealmIndex, forRealmIndex)) {
+
                 DynValue[] getPlannedAttacks()
                 {
                     List<RegionAttackRegionTransform> planned = new List<RegionAttackRegionTransform>();
@@ -390,9 +385,9 @@
                             tables[i] = new Table(script);
                             var attack = planned[i];
 
-                            tables[i].Set(PascalToSnake("AttackingRegionIndex"), DynValue.NewNumber(attack.AttackingRegionIndex));
-                            tables[i].Set(PascalToSnake("TargetRegionIndex"), DynValue.NewNumber(attack.targetRegionIndex));
-                            tables[i].Set(PascalToSnake("Extended"), DynValue.NewBoolean(attack.isExtendedAttack));
+                            tables[i].Set("attacking_regionn", IndexToLuaIndex(attack.AttackingRegionIndex));
+                            tables[i].Set("target_region", IndexToLuaIndex(attack.targetRegionIndex));
+                            tables[i].Set("is_extended", DynValue.NewBoolean(attack.isExtendedAttack));
 
                             values[i] = DynValue.NewTable(table);
                         }
@@ -400,80 +395,108 @@
 
                         return values;
                     }
+
+                    return new DynValue[0];
                 }
-                
+
                 table["planned_attacks"] = getPlannedAttacks();
-                
-                table["any_attack_planned"] = table["planned_attacks"].Table.Length;
+
+                table["any_attack_planned"] = table.Get("planned_attacks").Table.Length;
             }
 
-            if (world.CanSeePlannedConstructionsOf(player.RealmIndex, forRealmIndex))
-            {
+            if (world.CanSeePlannedConstructionsOf(player.RealmIndex, forRealmIndex)) {
 
                 DynValue[] getPlannedBuildings()
                 {
                     List<EBuilding> planned = new List<EBuilding>();
                     if (player.GetPlannedConstructions(planned)) {
-                        return planned.Select(o => DynValue.FromObject(script, o)).ToArray();
+                        DynValue[] plannedLua = planned.Select(o => DynValue.FromObject(script, o)).ToArray();
+                        return plannedLua;
                     }
 
                     return new DynValue[0];
                 }
 
                 table["planned_buildings"] = getPlannedBuildings();
-                table["is_building_anything"] = table["planned_buildings"].Table.Length;
+                table["is_building_anything"] = table.Get("planned_buildings").Table.Length;
 
             }
 
-            
-            table["refresh"] = (OneParamNoReturnDelegate)(DynValue self) => {
+
+            table["refresh"] = (OneParamNoReturnDelegate)((DynValue self) =>
+            {
                 WriteRealmObjectInto(player, forRealmIndex, world, session, self.Table);
-            };
+            });
         }
 
         private DynValue MakeRealmObject(SessionPlayer player, byte forRealmIndex, World world, GameSession session)
         {
             Table table = new Table(script);
-            
+
             WriteRealmObjectInto(player, forRealmIndex, world, session, table);
 
             return DynValue.NewTable(table);
         }
-        
+
         private DynValue MakeBuildingsObject(SessionPlayer player, World world, GameSession session)
         {
             Table table = new Table(script);
-            
+
             WriteBuildingsObjectInto(player, world, session, table);
 
             return DynValue.NewTable(table);
         }
 
+        private void WriteBuildingsObjectInto(SessionPlayer player, World world, GameSession session, Table table)
+        {
+            for (int i = 0; i < session.Rules.buildings.Length; i++) {
+                if (session.Rules.buildings[i].canBeBuilt) {
+                    EBuilding build = session.Rules.buildings[i].building;
+                    Table buildingTable = new Table(script);
+                    WriteBuildingObjectInto(player, build, world, session, buildingTable);
+                    table.Set(Dyn(build), DynValue.NewTable(buildingTable));
+                }
+            }
+        }
+
 
         private void WriteBuildingObjectInto(SessionPlayer player, EBuilding building, World world, GameSession session, Table table)
         {
-            table["can_afford"] = player.CanAfford(building);
-            table[PascalToSnake(nameof(player.CanBuild))] = ToLuaFunction<int, EBuilding, bool>(player.CanBuild);
+            table["can_afford"] = player.CanAfford(session.Rules.GetBuilding(building).silverCost);
+            table["silver_revenue"] = session.Rules.GetBuilding(building).silverRevenue;
+            table["can_build_on_region"] = (TwoParamGetterDelegate)((DynValue luaRegionIndex, DynValue luaBuilding) =>
+            {
+                EBuilding building = luaBuilding.ToObject<EBuilding>();
+                int index = LuaIndexToIndex(luaRegionIndex);
+                return Dyn(player.CanBuild(index, building));
+            });
         }
 
         private void WriteWorldObjectInto(SessionPlayer player, World world, GameSession session, Table table)
         {
             EFactionFlag faction = player.Faction;
-            
+
             {
-                List<DynValue> regionObjects = new (world.Regions.Count);
+                List<DynValue> regionObjects = new(world.Regions.Count);
                 for (int i = 0; i < world.Regions.Count; i++) {
-                    if (!world.Regions[i].inert) {
+                    if (world.Regions[i].inert) {
+                        var inertRegion = new Table(script);
+                        inertRegion.Set("inert", DynValue.True);
+                        regionObjects.Add(DynValue.NewTable(inertRegion));
+                    }
+                    else {
                         regionObjects.Add(MakeRegionObject(player, i, world, session));
                     }
                 }
 
                 Table regions = new Table(script, regionObjects.ToArray());
                 table["regions"] = regions;
+
+                Assert.AreEqual(world.Regions.Count, regions.Length);
             }
 
             {
-                List<DynValue> realmObjects = new (world.Regions.Count);
+                List<DynValue> realmObjects = new(world.Regions.Count);
                 for (byte i = 0; i < world.Realms.Count; i++) {
                     realmObjects.Add(MakeRealmObject(player, i, world, session));
                 }
@@ -481,16 +504,17 @@
                 Table realms = new Table(script, realmObjects.ToArray());
                 table["realms"] = realms;
             }
-            
-            table["refresh"] = (OneParamNoReturnDelegate)(DynValue self) => {
+
+            table["refresh"] = (OneParamNoReturnDelegate)((DynValue self) =>
+            {
                 WriteWorldObjectInto(player, world, session, self.Table);
-            };
+            });
         }
 
         private DynValue MakeWorldObject(SessionPlayer player, World world, GameSession session)
         {
             Table table = new Table(script);
-            WriteWorldObjectInto(player, world, session);
+            WriteWorldObjectInto(player, world, session, table);
             return DynValue.NewTable(table);
         }
 
@@ -500,75 +524,73 @@
             EFactionFlag faction = player.Faction;
             Position position = world.Position((int)forRegionIndex);
 
-           List<int> neighbors = new List<int>(8);
-           world.GetNeighboringRegions(forRegionIndex, neighbors);
+            List<int> neighbors = new List<int>(8);
+            world.GetNeighboringRegions(forRegionIndex, neighbors);
 
-           table["neighbor_indices"] = new Table(script, neighbors.Select(o => DynValue.NewNumber(o)).ToArray());
-           table["building"] = world.Regions[forRegionIndex].buildings;
-            
-           table["planned_construction"] = 
-                session.GetPlannedConstructionForRegion(forRegionIndex, out SessionPlayer builder, out EBuilding building)
-                && player.CanSeePlannedConstructionsOf(builder) 
-                    ? building 
-                    : EBuilding.None;
+            table["neighbor_indices"] = new Table(script, neighbors.Select(o => IndexToLuaIndex(o)).ToArray());
+            table["building"] = world.Regions[forRegionIndex].buildings;
 
-            if (world.regions[forRegionIndex].IsOwned(byte ownerIndex))
-            {
-                List<RegionAttackRegionTransform> attacks = new ();
-                if (session.GetOwnerOfRealm(ownerIndex, out byte owningPlayerId))
-                {
+            table["planned_construction"] =
+                 session.GetPlannedConstructionForRegion(forRegionIndex, out SessionPlayer builder, out EBuilding building)
+                 && player.CanSeePlannedConstructionsOf(builder)
+                     ? building
+                     : EBuilding.None;
+
+            if (world.Regions[forRegionIndex].GetOwner(out byte ownerIndex)) {
+                List<RegionAttackRegionTransform> attacks = new();
+                if (session.GetOwnerOfRealm(ownerIndex, out byte owningPlayerId)) {
                     SessionPlayer otherPlayer = session.SessionPlayers[owningPlayerId];
-                    if (player.CanSeePlannedAttacksOf(otherPlayer))
-                    {
+                    if (player.CanSeePlannedAttacksOf(otherPlayer)) {
                         otherPlayer.GetPlannedAttacks(attacks);
                     }
                 }
-                
-                table["planned_attacks"] = new Table(script, attacks.Select(o=>Dyn(o.targetRegionIndex)).ToArray());
+
+                table["planned_attacks"] = new Table(script, attacks.Select(o => IndexToLuaIndex(o.targetRegionIndex)).ToArray());
             }
-            
+
             table["has_played"] = session.HasRegionPlayed(forRegionIndex, out RegionRelatedTransform t)
                 && player.CanSeePlannedAttacksOf(t.owningRealm);
 
-            table["owner"] = world.Regions[forRegionIndex].GetOwner(out byte realmIndex) ? realmIndex : DynValue.Nil;
+            table["owner"] = world.Regions[forRegionIndex].GetOwner(out byte realmIndex) ? IndexToLuaIndex(realmIndex) : DynValue.Nil;
             table["subjugation_owner"] = world.Realms[player.RealmIndex].IsSubjugated(out byte subjugatorRealm)
-                ? subjugatorRealm
-                : table["owner"];  
+                ? IndexToLuaIndex(subjugatorRealm)
+                : table["owner"];
 
             table["silver_revenue"] = world.GetRegionSilverWorth(forRegionIndex);
 
             table["is_vulnerable"] = false;
             {
                 List<int> cache = new List<int>();
-                for (int i = 0; i < neighbors.Count; i++)
-                {
+                for (int i = 0; i < neighbors.Count; i++) {
                     cache.Clear();
                     EFactionFlag neighborFaction = world.GetRegionFaction(neighbors[i]);
                     bool canExtend = neighborFaction.HasFlagSafe(EFactionFlag.Charge);
                     world.GetAttackTargetsForRegionNoAlloc(neighbors[i], canExtend, cache);
-                    cache.RemoveAll(o=> world.Regions[o].CannotBeTaken(session.Rules, neighborFaction))
-                
-                    if (cache.Count > 0)
-                    {
+                    cache.RemoveAll(o => world.Regions[o].CannotBeTaken(session.Rules, neighborFaction));
+
+                    if (cache.Count > 0) {
                         table["is_vulnerable"] = true;
                         break;
                     }
                 }
-            }    
+            }
 
-            table["potential_attack_targets"] = new Table(
-                script, 
-                world
-                    .GetAttackTargetsForRegion(neighbors[i], faction.HasFlagSafe(EFactionFlag.Charge))
-                    .ToArray()
-            );
+            if (world.GetAttackTargetsForRegion(forRegionIndex, faction.HasFlagSafe(EFactionFlag.Charge), out List<int> attackTargets)) {
+
+                table["potential_attack_targets"] = new Table(
+                    script,
+                    attackTargets.Select(o => IndexToLuaIndex(o)).ToArray()
+                );
+            }
 
             table["lootable_silver"] = world.GetRegionLootableSilverWorth(forRegionIndex, player.RealmIndex);
 
-            table["position"] = new Table(script,  new DynValue[] {
-                DynValue.NewNumber(position.x),
-                DynValue.NewNumber(position.y)
-            });
+            {
+                Table positionTable = new Table(script);
+                positionTable["x"] = DynValue.NewNumber(position.x);
+                positionTable["y"] = DynValue.NewNumber(position.y);
+                table["position"] = positionTable;
+            }
 
             table["is_reinforced_against_attacks"] = world.Regions[forRegionIndex].IsReinforcedAgainstAttack(session.Rules, faction);
 
@@ -579,39 +601,42 @@
             table["can_be_attacked"] = world.CanRealmAttackRegion(player.RealmIndex, forRegionIndex);
 
             {
-                List<DynValue> attackAngles = new (world.Realms.Count);
+                List<DynValue> attackAngles = new(world.Realms.Count);
 
-                for(int i = 0; i < neighbors.Count; i++)
-                {  
+                for (int i = 0; i < neighbors.Count; i++) {
                     int neighborIndex = neighbors[i];
-                    if (world.Regions[neighborIndex].IsOwned(out byte owningRealm))
-                    {
-                        if (world.CanRealmAttackRegion(owningRealm, forRegionIndex))
-                        {
-                            attackAngles.Add(Dyn(owningRealm));
+                    if (world.Regions[neighborIndex].GetOwner(out byte owningRealm)) {
+                        if (world.CanRealmAttackRegion(owningRealm, forRegionIndex)) {
+                            attackAngles.Add(IndexToLuaIndex(forRegionIndex));
                         }
                     }
                 }
 
-                Table potential_attackers = new Table(script, regionObjects.ToArray());
+                Table potential_attackers = new Table(script, attackAngles.ToArray());
                 table["potential_attacking_regions"] = potential_attackers;
             }
 
             table["is_council"] = world.IsCouncilRegion(forRegionIndex);
 
-            table["refresh"] = (OneParamNoReturnDelegate)(DynValue self) => {
-                WriteRegionObjectInto(player, forRegionIndex, world, session, self.Table);
-            };
+            table["can_play"] = world.IsActionableRegion(player.RealmIndex, forRegionIndex) &&
+               !session.HasRegionPlayed(forRegionIndex);
 
-            table["can_play"] = world.IsActionableRegion(player.RealmIndex, forRegionIndex);
+            table["refresh"] = (OneParamNoReturnDelegate)((DynValue self) =>
+            {
+                WriteRegionObjectInto(player, forRegionIndex, world, session, self.Table);
+            });
         }
 
         private DynValue MakeRegionObject(SessionPlayer player, int forRegionIndex, World world, GameSession session)
         {
             Table table = new Table(script);
             WriteRegionObjectInto(player, forRegionIndex, world, session, table);
-           return DynValue.NewTable(table);
+            return DynValue.NewTable(table);
         }
+
+        private DynValue IndexToLuaIndex(int i) => Dyn(i + 1);
+
+        private int LuaIndexToIndex(DynValue i) => i.Number - 1;
 
 
         private DynValue MakeVotingObject(Voting voting)
@@ -696,13 +721,18 @@
         {
             Table table = new Table(script);
 
-            table[PascalToSnake(nameof(player.PayForFavours))] = ToLuaFunction(player.PayForFavours);
-            table[PascalToSnake(nameof(player.UpgradeAdministration))] = ToLuaFunction(player.UpgradeAdministration);
-            table[PascalToSnake(nameof(player.PlanAttack))] = ToLuaFunction<int, int>(player.PlanAttack);
-            table[PascalToSnake(nameof(player.PlanConstruction))] = ToLuaFunction<int, EBuilding>(player.PlanConstruction);
+            table["pay_for_favours"] = ToLuaFunction(player.PayForFavours);
+            table["upgrade_administration"] = ToLuaFunction(player.UpgradeAdministration);
+            table["plan_attack"] = (TwoParamNoReturnDelegate)((DynValue fromRegionIndex, DynValue toRegionIndex) => {
+                player.PlanAttack(LuaIndexToIndex(fromRegionIndex), LuaIndexToIndex(toRegionIndex));
+            });
+
+            table["plan_construction"] = (TwoParamNoReturnDelegate)((DynValue onRegionIndex, DynValue building) => {
+                player.PlanConstruction(LuaIndexToIndex(onRegionIndex), building.ToObject<EBuilding>());
+            }); 
 
             table["faction"] = DynValue.FromObject(script, player.Faction);
-            table["realm_index"] = DynValue.FromObject(script, player.RealmIndex);
+            table["realm_index"] = IndexToLuaIndex(player.RealmIndex);
 
             return DynValue.NewTable(table);
         }
@@ -752,16 +782,28 @@
             script.Globals["LOG"] = (OneParamNoReturnDelegate)Log;
 
             InjectEnum<EFactionFlag>();
-            InjectEnum<EBuilding>();
+            InjectEnum<EBuilding>(EBuilding.None);
             InjectEnum<EVotingCriteria>();
         }
 
-        private void InjectEnum<T>() where T : struct, Enum
+        private void InjectEnum<T>(T? nilValue = default) where T : struct, Enum
         {
             bool isString = !typeof(T).GetCustomAttributes(typeof(FlagsAttribute), true).Any();
 
             Script.GlobalOptions.CustomConverters.SetClrToScriptCustomConversion<T>(
-                (script, v) => DynValue.NewString(v.ToString())
+                (script, v) => {
+
+                    if (nilValue.HasValue) {
+                        int a = (int)(object)v;
+                        int b = (int)(object)nilValue.Value;
+                        if (a == b) {
+                            return DynValue.Nil;
+                        }
+                    }
+
+                    return isString ? DynValue.NewString(v.ToString()) : DynValue.NewNumber((int)(object)v);
+
+                }
             );
 
             Script.GlobalOptions.CustomConverters.SetScriptToClrCustomConversion(
@@ -769,6 +811,10 @@
                 typeof(T),
                 (dynVal) =>
                 {
+                    if (dynVal.IsNil() && nilValue.HasValue) {
+                        return nilValue.Value;
+                    }
+
                     if (isString) {
                         bool findEnum(string str, out T parsed)
                         {
