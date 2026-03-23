@@ -12,7 +12,6 @@
     using System.Linq;
     using System.Numerics;
     using System.Text;
-    using UnityEngine.Assertions;
 
     public class LuaComputerPlayerBehaviour : ComputerPlayerBehaviour
     {
@@ -492,7 +491,9 @@
                 Table regions = new Table(script, regionObjects.ToArray());
                 table["regions"] = regions;
 
+#if UNITY_EDITOR
                 Assert.AreEqual(world.Regions.Count, regions.Length);
+#endif
             }
 
             {
