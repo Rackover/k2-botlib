@@ -492,7 +492,7 @@
                 table["regions"] = regions;
 
 #if UNITY_EDITOR
-                Assert.AreEqual(world.Regions.Count, regions.Length);
+                System.Diagnostics.Debug.Assert(world.Regions.Count == regions.Length);
 #endif
             }
 
