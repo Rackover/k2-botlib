@@ -575,7 +575,7 @@
                 }
             }
 
-            if (world.GetAttackTargetsForRegion(forRegionIndex, faction.HasFlagSafe(EFactionFlag.Charge), out List<int> attackTargets)) {
+            if (world.GetAttackTargetsForRegion(forRegionIndex, player.CanExtendAttack(), out List<int> attackTargets)) {
 
                 table["potential_attack_targets"] = new Table(
                     script,
