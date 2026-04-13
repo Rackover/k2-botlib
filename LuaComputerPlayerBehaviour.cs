@@ -317,8 +317,8 @@
         private void WriteGameObjectInto(byte forPlayerIndex, GameSession session, Table table)
         {
             table["rules"] = MakeRulesObject(session.Rules);
-            table["random"] = MakeAPI(session.ComputersRandom);
-            table["player"] = MakeAPI(session.SessionPlayers[forPlayerIndex]);
+            table["random"] = MakeRandomObject(session.ComputersRandom);
+            table["player"] = MakeSessionPlayerObject(session.SessionPlayers[forPlayerIndex], session.CurrentGameState.world);
             table["world"] = MakeWorldObject(session.SessionPlayers[forPlayerIndex], session.CurrentGameState.world, session);
             table["voting"] = MakeVotingObject(session.CurrentGameState.voting);
             table["days_passed"] = session.CurrentGameState.daysPassed;
@@ -386,7 +386,9 @@
 
                             tables[i].Set("attacking_regionn", IndexToLuaIndex(attack.AttackingRegionIndex));
                             tables[i].Set("target_region", IndexToLuaIndex(attack.targetRegionIndex));
-                            tables[i].Set("is_extended", DynValue.NewBoolean(attack.isExtendedAttack));
+                            tables[i].Set("is_extended", DynValue.NewBoolean(attack.attackType != ERegionAttackType.Standard));
+                            tables[i].Set("is_charge", DynValue.NewBoolean(attack.attackType == ERegionAttackType.Charge));
+                            tables[i].Set("is_slithering", DynValue.NewBoolean(attack.attackType == ERegionAttackType.Slithering));
 
                             values[i] = DynValue.NewTable(table);
                         }
@@ -561,13 +563,13 @@
 
             table["is_vulnerable"] = false;
             {
-                List<int> cache = new List<int>();
+                List<AttackTarget> cache = new List<AttackTarget>();
                 for (int i = 0; i < neighbors.Count; i++) {
                     cache.Clear();
                     EFactionFlag neighborFaction = world.GetRegionFaction(neighbors[i]);
-                    bool canExtend = neighborFaction.HasFlagSafe(EFactionFlag.Charge);
-                    world.GetAttackTargetsForRegionNoAlloc(neighbors[i], canExtend, cache);
-                    cache.RemoveAll(o => world.Regions[o].CannotBeTaken(session.Rules, neighborFaction));
+                    ERegionAttackType attackType = neighborFaction.ToAttackType();
+                    world.GetAttackTargetsForRegionNoAlloc(neighbors[i], attackType, cache);
+                    cache.RemoveAll(o => world.Regions[o.regionIndex].CannotBeTaken(session.Rules, neighborFaction));
 
                     if (cache.Count > 0) {
                         table["is_vulnerable"] = true;
@@ -576,11 +578,11 @@
                 }
             }
 
-            if (world.GetAttackTargetsForRegion(forRegionIndex, player.CanExtendAttack(), out List<int> attackTargets)) {
+            if (world.GetAttackTargetsForRegion(forRegionIndex, player.GetAllowedAttackTypes(), out List<AttackTarget> attackTargets)) {
 
                 table["potential_attack_targets"] = new Table(
                     script,
-                    attackTargets.Select(o => IndexToLuaIndex(o)).ToArray()
+                    attackTargets.Select(o => IndexToLuaIndex(o.regionIndex)).ToArray()
                 );
             }
 
@@ -718,14 +720,23 @@
             return () => DynValue.FromObject(script, func());
         }
 
-        protected DynValue MakeAPI(SessionPlayer player)
+        protected DynValue MakeSessionPlayerObject(SessionPlayer player, World world)
         {
             Table table = new Table(script);
 
             table["pay_for_favours"] = ToLuaFunction(player.PayForFavours);
             table["upgrade_administration"] = ToLuaFunction(player.UpgradeAdministration);
             table["plan_attack"] = (TwoParamNoReturnDelegate)((DynValue fromRegionIndex, DynValue toRegionIndex) => {
-                player.PlanAttack(LuaIndexToIndex(fromRegionIndex), LuaIndexToIndex(toRegionIndex));
+
+                int fromRegion = LuaIndexToIndex(fromRegionIndex);
+                int toRegion = LuaIndexToIndex(toRegionIndex);
+                if (world.GetAttackTargetsForRegion(fromRegion, player.GetAllowedAttackTypes(), out List<AttackTarget> targets)) {
+                    for (int i = 0; i < targets.Count; i++) {
+                        if (targets[i].regionIndex == toRegion) {
+                            player.PlanAttack(fromRegion, targets[i]);
+                        }
+                    }
+                }
             });
 
             table["plan_construction"] = (TwoParamNoReturnDelegate)((DynValue onRegionIndex, DynValue building) => {
@@ -752,7 +763,7 @@
         }
 
 
-        protected DynValue MakeAPI(ManagedRandom random)
+        protected DynValue MakeRandomObject(ManagedRandom random)
         {
             Table table = new Table(script);
 
