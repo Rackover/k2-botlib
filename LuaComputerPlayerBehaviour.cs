@@ -741,7 +741,9 @@
 
             table["plan_construction"] = (TwoParamNoReturnDelegate)((DynValue onRegionIndex, DynValue building) => {
                 player.PlanConstruction(LuaIndexToIndex(onRegionIndex), building.ToObject<EBuilding>());
-            }); 
+            });
+
+            table["waste_action"] = ToLuaFunction(player.WasteAction);
 
             table["faction"] = DynValue.FromObject(script, player.Faction);
             table["realm_index"] = IndexToLuaIndex(player.RealmIndex);
