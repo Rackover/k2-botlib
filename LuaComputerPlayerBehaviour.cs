@@ -531,7 +531,7 @@
             world.GetNeighboringRegions(forRegionIndex, neighbors);
 
             table["neighbor_indices"] = new Table(script, neighbors.Select(o => IndexToLuaIndex(o)).ToArray());
-            table["building"] = world.Regions[forRegionIndex].buildings;
+            table["building"] = world.Regions[forRegionIndex].PretensedBuilding;
 
             table["planned_construction"] =
                  session.GetPlannedConstructionForRegion(forRegionIndex, out SessionPlayer builder, out EBuilding building)
@@ -549,6 +549,7 @@
                 }
 
                 table["planned_attacks"] = new Table(script, attacks.Select(o => IndexToLuaIndex(o.targetRegionIndex)).ToArray());
+                table["building"] = world.Regions[forRegionIndex].RelevantBuilding;
             }
 
             table["has_played"] = session.HasRegionPlayed(forRegionIndex, out RegionRelatedTransform t)
