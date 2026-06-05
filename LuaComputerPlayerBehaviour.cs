@@ -318,7 +318,7 @@
         {
             table["rules"] = MakeRulesObject(session.Rules);
             table["random"] = MakeRandomObject(session.ComputersRandom);
-            table["player"] = MakeSessionPlayerObject(session.SessionPlayers[forPlayerIndex], session.CurrentGameState.world);
+            table["player"] = MakeSessionPlayerObject(session.SessionPlayers[forPlayerIndex], session.CurrentGameState);
             table["world"] = MakeWorldObject(session.SessionPlayers[forPlayerIndex], session.CurrentGameState.world, session);
             table["voting"] = MakeVotingObject(session.CurrentGameState.voting);
             table["days_passed"] = session.CurrentGameState.daysPassed;
@@ -569,7 +569,7 @@
                     cache.Clear();
                     EFactionFlag neighborFaction = world.GetRegionFaction(neighbors[i]);
                     ERegionAttackType attackType = neighborFaction.ToAttackType();
-                    world.GetAttackTargetsForRegionNoAlloc(neighbors[i], attackType, cache);
+                    session.CurrentGameState.GetAttackTargetsForRegionNoAlloc(neighbors[i], attackType, cache);
                     cache.RemoveAll(o => world.Regions[o.regionIndex].CannotBeTaken(session.Rules, neighborFaction));
 
                     if (cache.Count > 0) {
@@ -579,7 +579,7 @@
                 }
             }
 
-            if (world.GetAttackTargetsForRegion(forRegionIndex, player.GetAllowedAttackTypes(), out List<AttackTarget> attackTargets)) {
+            if (session.CurrentGameState.GetAttackTargetsForRegion(forRegionIndex, player.GetAllowedAttackTypes(), out List<AttackTarget> attackTargets)) {
 
                 table["potential_attack_targets"] = new Table(
                     script,
@@ -602,7 +602,7 @@
 
             table["can_be_taken"] = !world.Regions[forRegionIndex].CannotBeTaken(session.Rules, faction);
 
-            table["can_be_attacked"] = world.CanRealmAttackRegion(player.RealmIndex, forRegionIndex);
+            table["can_be_attacked"] = session.CurrentGameState.CanRealmAttackRegion(player.RealmIndex, forRegionIndex);
 
             {
                 List<DynValue> attackAngles = new(world.Realms.Count);
@@ -610,7 +610,7 @@
                 for (int i = 0; i < neighbors.Count; i++) {
                     int neighborIndex = neighbors[i];
                     if (world.Regions[neighborIndex].GetOwner(out byte owningRealm)) {
-                        if (world.CanRealmAttackRegion(owningRealm, forRegionIndex)) {
+                        if (session.CurrentGameState.CanRealmAttackRegion(owningRealm, forRegionIndex)) {
                             attackAngles.Add(IndexToLuaIndex(forRegionIndex));
                         }
                     }
@@ -621,6 +621,16 @@
             }
 
             table["is_council"] = world.IsCouncilRegion(forRegionIndex);
+
+            if (session.CurrentGameState.board is BeastWorldBoard beastWorld) {
+                if (beastWorld.IsAnyBeastOn(forRegionIndex, out byte beastIndex)) {
+                    table["has_beast"] = true;
+                    table["beast_index"] = beastIndex;
+                }
+                else {
+                    table["has_beast"] = false;
+                }
+            }
 
             table["can_play"] = world.IsActionableRegion(player.RealmIndex, forRegionIndex) &&
                !session.HasRegionPlayed(forRegionIndex);
@@ -721,7 +731,7 @@
             return () => DynValue.FromObject(script, func());
         }
 
-        protected DynValue MakeSessionPlayerObject(SessionPlayer player, World world)
+        protected DynValue MakeSessionPlayerObject(SessionPlayer player, GameState state)
         {
             Table table = new Table(script);
 
@@ -731,7 +741,7 @@
 
                 int fromRegion = LuaIndexToIndex(fromRegionIndex);
                 int toRegion = LuaIndexToIndex(toRegionIndex);
-                if (world.GetAttackTargetsForRegion(fromRegion, player.GetAllowedAttackTypes(), out List<AttackTarget> targets)) {
+                if (state.GetAttackTargetsForRegion(fromRegion, player.GetAllowedAttackTypes(), out List<AttackTarget> targets)) {
                     for (int i = 0; i < targets.Count; i++) {
                         if (targets[i].regionIndex == toRegion) {
                             player.PlanAttack(fromRegion, targets[i]);
