@@ -269,10 +269,18 @@
 
         private void PrintTableRecursively(DynValue val, StringBuilder builder, int depth = 0)
         {
+
             string tabs = "";
 
             for (int i = 0; i < depth; i++) {
                 tabs += "\t";
+            }
+
+            if (depth > 12) { // That's just silly
+                builder.Append(tabs);
+                builder.Append("...");
+                builder.AppendLine();
+                return;
             }
 
             foreach (var key in val.Table.Keys) {
